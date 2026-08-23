@@ -441,6 +441,63 @@ def _call_ai(prompt: str, api_key: str, local_only: bool = False) -> DJDirective
     return None
 
 
+def get_dj_commentary(
+    current_track: dict,
+    next_track: dict,
+    personality: str,
+    api_key: str,
+    local_only: bool = False,
+) -> str:
+    """Write one short, speakable transition grounded in the real queue."""
+    preference_context = build_preference_context(load_preferences())
+    prompt = f"""
+You are a live music DJ. Write exactly one natural spoken transition, no more
+than 45 words. Never invent facts about a song. Mention only metadata supplied
+below. Do not use quotation marks, markdown, stage directions, or emojis.
+
+DJ personality: {personality}
+Current track: {json.dumps(current_track, ensure_ascii=False)}
+Next track: {json.dumps(next_track, ensure_ascii=False)}
+{preference_context}
+""".strip()
+
+    if api_key and not local_only:
+        client = genai.Client(api_key=api_key)
+        for model_name in CANDIDATE_MODELS:
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        temperature=0.85,
+                        max_output_tokens=100,
+                    ),
+                )
+                text = (response.text or "").strip()
+                if text:
+                    return text
+            except Exception:
+                continue
+
+    if LOCAL_LLM_BASE_URL:
+        from openai import OpenAI
+        client = OpenAI(
+            base_url=f"{LOCAL_LLM_BASE_URL.rstrip('/')}/v1",
+            api_key=LOCAL_LLM_API_KEY or "local",
+        )
+        response = client.chat.completions.create(
+            model=LOCAL_LLM_MODEL,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.85,
+            max_tokens=100,
+        )
+        text = response.choices[0].message.content or ""
+        if text.strip():
+            return text.strip()
+
+    raise RuntimeError("No commentary AI is configured")
+
+
 PLAYLIST_PROMPT = """
 You are an expert music curator powering a Spotify AI DJ.
 

@@ -23,6 +23,9 @@ It started as a super small project, but I liked it so much that I made it into 
 * **Toggle Control:** Switch between Local LLM or Cloud easily.
 * **Playback Control:** Basic media controls (play, pause, like songs).
 * **Preferenece engine** Learns your preferences in music over time from likes and skips (inside of the app).
+* **Spoken DJ:** Track-aware commentary through ElevenLabs with selectable female voices.
+* **DJ controls:** Adjust personality, talking frequency, and music ducking in Settings.
+* **Contextual commands:** Relative requests such as "play something heavier" are grounded in the current track and previous request.
 
 ---
 
@@ -32,6 +35,9 @@ It started as a super small project, but I liked it so much that I made it into 
 * **Gemini API Key** from [Google AI Studio](https://aistudio.google.com).
     * *Note: It takes a few seconds to make and is free!! (a good thing).*
 * **Or: Ollama running locally** no API key needed, fully private, works offline.
+* **Optional: ElevenLabs free account** for spoken commentary. The free API tier
+  includes a monthly text-to-speech allowance; add the key in Settings and use
+  **Load my female voices** to choose from voices available to your account.
 
 ---
 
@@ -180,6 +186,8 @@ SpotifyDJ/
 ├── app_ctk.py          customtkinter backend (Windows, macOS, Linux X11)
 ├── cli.py              Headless CLI mode — play without opening a window
 ├── brain.py            Gemini AI — converts requests to Spotify search queries
+├── dj_host.py          Track-aware commentary cadence and Spotify ducking
+├── elevenlabs_tts.py   ElevenLabs voices, synthesis, and local audio playback
 ├── spotify_client.py   Spotify OAuth and playback control
 ├── config.py           User config storage (~/.spotify-ai-dj/config.json)
 ├── requirements.txt    Python dependencies
@@ -261,6 +269,9 @@ Contents:
 config.json      Gemini API key
 .spotify_cache   Spotify OAuth token (auto-refreshed)
 ```
+
+`config.json` also stores the optional ElevenLabs key and DJ preferences. This
+file remains outside the repository and must never be committed.
 
 ### Packaging into a standalone executable
 

@@ -17,8 +17,10 @@ from datetime import datetime
 
 import customtkinter as ctk
 
-from brain import get_vibe_params, get_playlist_vibe_params
+from brain import get_vibe_params, get_playlist_vibe_params, get_dj_commentary
 from config import is_configured, load_config, save_config, load_env_llm_config, save_env_llm_config
+from dj_host import DJHost, choose_relative_request
+from elevenlabs_tts import ElevenLabsTTS
 from preferences import load_preferences
 from spotify_client import SpotifyClient
 
@@ -57,6 +59,13 @@ class SpotifyAIDJApp(ctk.CTk):
 
         self._config    = load_config()
         self._spotify   = SpotifyClient()
+        self._current_track = None
+        self._dj_host = DJHost(
+            self._spotify,
+            load_config,
+            self._generate_commentary,
+            self._log,
+        )
         self._is_playing = False  # Blocks duplicate requests while one is running
 
         if is_configured():
@@ -384,6 +393,7 @@ class SpotifyAIDJApp(ctk.CTk):
     def _update_player_bar(self, track: dict | None) -> None:
         if not hasattr(self, "_track_label"):
             return
+        self._current_track = track
         # Refresh queue panel
         def _fetch_queue():
             items = self._spotify.get_queue()
@@ -401,6 +411,10 @@ class SpotifyAIDJApp(ctk.CTk):
                 text_color="white",
             )
             self._like_button.configure(text="♥" if track["is_liked"] else "♡")
+            def _observe():
+                queue = self._spotify.get_queue()
+                self._dj_host.observe(track, queue[0] if queue else None)
+            threading.Thread(target=_observe, daemon=True).start()
         else:
             self._track_label.configure(text="Not playing", text_color="gray")
             self._like_button.configure(text="♡")
@@ -430,6 +444,10 @@ class SpotifyAIDJApp(ctk.CTk):
         if not request:
             self._log("Enter a request first.")
             return
+        previous_request = self._spotify.last_request
+        request = choose_relative_request(
+            request, self._current_track, previous_request
+        )
         self._spotify.last_request = request
         self._set_busy(True)
         threading.Thread(target=self._play_worker, args=(request, False), daemon=True).start()
@@ -551,7 +569,7 @@ class SpotifyAIDJApp(ctk.CTk):
 
         dialog = ctk.CTkToplevel(self)
         dialog.title("Settings")
-        dialog.geometry("480x560")
+        dialog.geometry("500x760")
         dialog.resizable(False, False)
         dialog.grab_set()
 
@@ -605,6 +623,71 @@ class SpotifyAIDJApp(ctk.CTk):
         learning_var    = _toggle_row("Enable preference learning  (likes, skips, taste profile)",
                                        self._config.get("learning_enabled", True))
 
+        # ---- DJ voice ----
+        ctk.CTkLabel(frame, text="", height=8).pack()
+        _label("DJ Voice (ElevenLabs)", bold=True)
+        _label("Free plan: 10,000 Multilingual v2 characters/month.", muted=True)
+        eleven_key_entry = _entry(
+            self._config.get("elevenlabs_api_key", ""), "ElevenLabs API key", secret=True
+        )
+        _label("Voice")
+        voice_map = {
+            self._config.get("dj_voice_name", "Rachel"):
+                self._config.get("dj_voice_id", "21m00Tcm4TlvDq8ikWAM")
+        }
+        voice_menu = ctk.CTkOptionMenu(frame, values=list(voice_map))
+        voice_menu.set(self._config.get("dj_voice_name", "Rachel"))
+        voice_menu.pack(fill="x", pady=(0, 4))
+        voice_status = ctk.CTkLabel(frame, text="", font=("Helvetica", 11), text_color="gray")
+        voice_status.pack(fill="x")
+
+        def load_voices() -> None:
+            key = eleven_key_entry.get().strip()
+            if not key:
+                voice_status.configure(text="Enter your ElevenLabs key first.", text_color="red")
+                return
+            voice_status.configure(text="Loading female voices...", text_color="gray")
+
+            def _work() -> None:
+                try:
+                    voices = ElevenLabsTTS(key).list_voices(female_only=True)
+                    if not voices:
+                        raise RuntimeError("No female voices are available to this account")
+                    voice_map.clear()
+                    voice_map.update({voice.name: voice.voice_id for voice in voices})
+                    names = list(voice_map)
+                    self.after(0, lambda: voice_menu.configure(values=names))
+                    self.after(0, lambda: voice_menu.set(names[0]))
+                    self.after(0, lambda: voice_status.configure(
+                        text=f"Loaded {len(names)} voices.", text_color="gray"
+                    ))
+                except Exception as exc:
+                    self.after(0, lambda: voice_status.configure(
+                        text=f"Could not load voices: {exc}", text_color="red"
+                    ))
+
+            threading.Thread(target=_work, daemon=True).start()
+
+        ctk.CTkButton(
+            frame, text="Load my female voices", height=32,
+            fg_color="transparent", border_width=1, command=load_voices,
+        ).pack(fill="x", pady=(2, 6))
+        commentary_var = _toggle_row(
+            "Enable spoken DJ commentary",
+            self._config.get("dj_commentary_enabled", True),
+        )
+        _label("DJ personality")
+        personality_entry = _entry(
+            self._config.get("dj_personality", "Warm, witty, music-obsessed, and concise"),
+            "Warm, witty, concise",
+        )
+        _label("Talking frequency")
+        frequency_menu = ctk.CTkOptionMenu(frame, values=["never", "low", "normal", "high"])
+        frequency_menu.set(self._config.get("dj_talking_frequency", "normal"))
+        frequency_menu.pack(fill="x", pady=(0, 4))
+        _label("Duck music to this volume (0-100)")
+        duck_entry = _entry(str(self._config.get("dj_duck_volume", 18)), "18")
+
         prefs = load_preferences()
         n_liked   = len(prefs.get("liked_tracks", []))
         n_skipped = len(prefs.get("skipped_tracks", []))
@@ -628,6 +711,18 @@ class SpotifyAIDJApp(ctk.CTk):
             self._config["gemini_api_key"]   = new_gemini
             self._config["local_ai_only"]    = using_local_only
             self._config["learning_enabled"] = learning_var.get()
+            self._config["elevenlabs_api_key"] = eleven_key_entry.get().strip()
+            selected_voice = voice_menu.get()
+            self._config["dj_voice_id"] = voice_map.get(selected_voice, "21m00Tcm4TlvDq8ikWAM")
+            self._config["dj_voice_name"] = selected_voice or "Rachel"
+            self._config["dj_commentary_enabled"] = commentary_var.get()
+            self._config["dj_personality"] = personality_entry.get().strip() or "Warm and concise"
+            self._config["dj_talking_frequency"] = frequency_menu.get()
+            try:
+                self._config["dj_duck_volume"] = max(0, min(100, int(duck_entry.get())))
+            except ValueError:
+                error_label.configure(text="Duck volume must be a number from 0 to 100.")
+                return
             save_config(self._config)
             save_env_llm_config(
                 base_url = url_entry.get().strip(),
@@ -647,6 +742,16 @@ class SpotifyAIDJApp(ctk.CTk):
         ctk.CTkButton(btn_frame, text="Cancel", height=38,
                       fg_color="transparent", border_width=1,
                       command=dialog.destroy).pack(side="left")
+
+    def _generate_commentary(self, current: dict, next_track: dict, personality: str) -> str:
+        config = load_config()
+        return get_dj_commentary(
+            current,
+            next_track,
+            personality,
+            config.get("gemini_api_key", ""),
+            local_only=config.get("local_ai_only", False),
+        )
 
 
     def _log(self, message: str, success: bool = None) -> None:

@@ -22,6 +22,14 @@ DEFAULT_CONFIG: dict = {
     "gemini_api_key":    "",
     "local_ai_only":     False,  # when True, skip Gemini and use local LLM only
     "learning_enabled":  True,   # when False, disable preference recording and scoring
+    "elevenlabs_api_key": "",
+    "dj_commentary_enabled": True,
+    "dj_voice_id": "21m00Tcm4TlvDq8ikWAM",  # Rachel, premade female voice
+    "dj_voice_name": "Rachel",
+    "dj_tts_model": "eleven_multilingual_v2",
+    "dj_personality": "Warm, witty, music-obsessed, and concise",
+    "dj_talking_frequency": "normal",
+    "dj_duck_volume": 18,
 }
 
 

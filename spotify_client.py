@@ -493,8 +493,10 @@ class SpotifyClient:
             items = resp.json().get("queue", [])[:20]
             return [
                 {
+                    "id":     t.get("id", ""),
                     "name":   t.get("name", ""),
                     "artist": t["artists"][0]["name"] if t.get("artists") else "Unknown",
+                    "album":  (t.get("album") or {}).get("name", ""),
                     "uri":    t.get("uri", ""),
                 }
                 for t in items
@@ -524,6 +526,7 @@ class SpotifyClient:
                 "uri":      item["uri"],
                 "name":     item["name"],
                 "artist":   item["artists"][0]["name"] if item.get("artists") else "Unknown",
+                "album":    (item.get("album") or {}).get("name", ""),
                 "is_liked": track_id in self._liked_ids,
             }
         except Exception as e:
