@@ -445,32 +445,51 @@ class SpotifyClient:
         Sequential is simpler and reliable. With 8-10 queries at ~0.3s each
         this takes 2-3 seconds total — fast enough and no threading complexity.
 
-        Shuffling before truncation gives a varied mix across all queries
-        rather than all results from query 1 then all from query 2.
+        The AI always puts the most literal match for the request (an exact
+        artist/song name) first in `queries`, with similar artists and genre
+        terms as supporting queries after it. Without prioritization, a flat
+        shuffle across the whole pool treats those identically — a broad
+        genre query can return far more tracks than a specific artist name,
+        drowning out the artist the user actually asked for. So the primary
+        query's tracks are ranked ahead of the rest, capped at 60% of the
+        target so the supporting variety the AI curated still comes through.
         """
-        all_tracks: list[dict] = []
+        if not queries:
+            return []
 
-        for query in queries:
-            all_tracks.extend(self._run_single_search(query))
+        def dedupe(tracks: list[dict], seen: set[str]) -> list[dict]:
+            unique = []
+            for track in tracks:
+                uri = track.get("uri", "")
+                if uri and uri not in seen:
+                    seen.add(uri)
+                    unique.append(track)
+            return unique
 
-        # Deduplicate by URI, preserving first encounter
-        seen:   set[str]   = set()
-        unique: list[dict] = []
-        for track in all_tracks:
-            uri = track.get("uri", "")
-            if uri and uri not in seen:
-                seen.add(uri)
-                unique.append(track)
+        primary_query, *supporting_queries = queries
+        seen: set[str] = set()
+        primary_tracks    = dedupe(self._run_single_search(primary_query), seen)
+        supporting_tracks: list[dict] = []
+        for query in supporting_queries:
+            supporting_tracks.extend(dedupe(self._run_single_search(query), seen))
 
-        print(f"[spotify] {len(unique)} unique tracks from {len(queries)} queries")
+        print(
+            f"[spotify] {len(primary_tracks)} primary + {len(supporting_tracks)} "
+            f"supporting tracks from {len(queries)} queries"
+        )
 
         # Score and rerank by taste profile (Option 2)
         # Falls back to shuffle if no centroid exists yet
         prefs = load_preferences()
         if prefs.get("taste_centroid"):
-            unique = score_tracks(unique, prefs)
+            primary_tracks    = score_tracks(primary_tracks, prefs)
+            supporting_tracks = score_tracks(supporting_tracks, prefs)
         else:
-            random.shuffle(unique)
+            random.shuffle(primary_tracks)
+            random.shuffle(supporting_tracks)
+
+        primary_cap = max(1, round(target * 0.6)) if primary_tracks else 0
+        unique = primary_tracks[:primary_cap] + supporting_tracks
 
         return unique[:target]
 

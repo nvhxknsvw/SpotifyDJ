@@ -87,6 +87,27 @@ class DJHost:
         ).start()
         return True
 
+    def speak_welcome(self, current: Optional[dict]) -> bool:
+        """
+        Speak an immediate greeting for a freshly started session (e.g. the
+        Begin button), bypassing the normal talking-frequency gate — the
+        listener just pressed a button, they expect to hear from the DJ now.
+        """
+        current = compact_track(current)
+        if not current.get("id"):
+            return False
+        config = self.config_loader()
+        if not config.get("dj_commentary_enabled", True):
+            return False
+        self._last_track_id = current["id"]
+        self._changes_since_talk = 0
+        threading.Thread(
+            target=self._speak_for_transition,
+            args=(current, {}, config),
+            daemon=True,
+        ).start()
+        return True
+
     def _speak_for_transition(self, current: dict, next_track: dict, config: dict) -> None:
         with self._lock:
             if self._speaking:

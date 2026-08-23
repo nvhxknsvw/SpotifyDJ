@@ -198,9 +198,19 @@ class SpotifyAIDJApp(ctk.CTk):
             command=self._open_settings_dialog,
         ).pack(side="right")
 
+        # Begin — one-tap DJ session start, like Spotify's own AI DJ
+        self._begin_button = ctk.CTkButton(
+            self,
+            text="▶  Begin",
+            height=48,
+            font=("Helvetica", 15, "bold"),
+            command=self._handle_begin,
+        )
+        self._begin_button.pack(fill="x", padx=20, pady=(20, 0))
+
         # Request input
         input_frame = ctk.CTkFrame(self, fg_color="transparent")
-        input_frame.pack(fill="x", padx=20, pady=(24, 0))
+        input_frame.pack(fill="x", padx=20, pady=(16, 0))
 
         ctk.CTkLabel(
             input_frame, text="What do you want to hear?", font=FONT_BODY
@@ -436,6 +446,57 @@ class SpotifyAIDJApp(ctk.CTk):
         except Exception:
             pass  # Window destroyed
 
+    def _handle_begin(self) -> None:
+        """
+        One-tap DJ session start, like Spotify's own AI DJ: picks a warm-up
+        based on the listener's taste profile, starts playback, then has
+        the DJ greet them once the track is live.
+        """
+        if self._is_playing:
+            return
+        seed_request = (
+            "Surprise me — start my session with music you think I'll love "
+            "based on my taste and listening history."
+        )
+        self._spotify.last_request = seed_request
+        self._set_busy(True)
+        threading.Thread(target=self._begin_worker, args=(seed_request,), daemon=True).start()
+
+    def _begin_worker(self, request: str) -> None:
+        """Runs in a background thread: taste-based warm-up, then a spoken greeting."""
+        self._log("Beginning DJ session — picking a warm-up based on your taste...")
+        try:
+            config     = load_config()
+            api_key    = config.get("gemini_api_key", "")
+            local_only = config.get("local_ai_only", False)
+            directives = get_vibe_params(request, api_key, local_only=local_only)
+            self._log(f"AI: {directives.reasoning}")
+            self._log(f"Running {len(directives.queries)} searches, targeting {directives.queue_size} tracks...")
+        except Exception as e:
+            self.after(0, lambda: self._finish_worker(f"AI error: {e}", success=False))
+            return
+
+        try:
+            result = self._spotify.search_and_play(directives)
+        except Exception as e:
+            self.after(0, lambda: self._finish_worker(f"Spotify error: {e}", success=False))
+            return
+
+        if result.success:
+            extra = f" — {result.track_count} tracks from {result.queries_run} searches" if result.track_count > 1 else ""
+            self.after(0, lambda: self._finish_worker(f"Now playing: {result.first_track}{extra}", success=True))
+            self.after(1500, self._speak_begin_welcome)
+        else:
+            self.after(0, lambda: self._finish_worker(result.message, success=False))
+
+    def _speak_begin_welcome(self) -> None:
+        """Greet the listener once the warm-up track is actually live on Spotify."""
+        def _work():
+            track = self._spotify.get_current_track()
+            if track:
+                self._dj_host.speak_welcome(track)
+        threading.Thread(target=_work, daemon=True).start()
+
     def _handle_play(self) -> None:
         """Triggered by the Play button or Enter key."""
         if self._is_playing:
@@ -559,6 +620,9 @@ class SpotifyAIDJApp(ctk.CTk):
         )
         self._continue_button.configure(state=state)
         self._request_entry.configure(state=state)
+        self._begin_button.configure(
+            state=state, text="Working..." if busy else "▶  Begin"
+        )
 
     # ------------------------------------------------------------------
     # Settings dialog
@@ -677,10 +741,34 @@ class SpotifyAIDJApp(ctk.CTk):
             self._config.get("dj_commentary_enabled", True),
         )
         _label("DJ personality")
-        personality_entry = _entry(
-            self._config.get("dj_personality", "Warm, witty, music-obsessed, and concise"),
-            "Warm, witty, concise",
+        PERSONALITY_PRESETS = {
+            "Warm & Witty (default)": "Warm, witty, music-obsessed, and concise",
+            "Hype Hype-Man": "High-energy hype man, loud enthusiasm, short adlibs like a festival MC",
+            "Chill Lounge": "Laid-back late-night lounge host, smooth and unhurried, minimal words",
+            "Old-School Radio": "Classic FM radio announcer, polished and nostalgic, like a 90s drivetime DJ",
+            "Sassy & Sarcastic": "Sassy, sarcastic, playful roasting energy, still music-focused",
+            "Custom": None,
+        }
+        current_personality = self._config.get(
+            "dj_personality", PERSONALITY_PRESETS["Warm & Witty (default)"]
         )
+        initial_choice = next(
+            (name for name, text in PERSONALITY_PRESETS.items() if text == current_personality),
+            "Custom",
+        )
+        personality_menu = ctk.CTkOptionMenu(frame, values=list(PERSONALITY_PRESETS))
+        personality_menu.set(initial_choice)
+        personality_menu.pack(fill="x", pady=(0, 4))
+
+        _label("Personality prompt  (edit freely, or pick a preset above)", muted=True)
+        personality_entry = _entry(current_personality, "Warm, witty, concise")
+
+        def _apply_personality_preset(choice: str) -> None:
+            preset_text = PERSONALITY_PRESETS.get(choice)
+            if preset_text is not None:
+                personality_entry.delete(0, "end")
+                personality_entry.insert(0, preset_text)
+        personality_menu.configure(command=_apply_personality_preset)
         _label("Talking frequency")
         frequency_menu = ctk.CTkOptionMenu(frame, values=["never", "low", "normal", "high"])
         frequency_menu.set(self._config.get("dj_talking_frequency", "normal"))
